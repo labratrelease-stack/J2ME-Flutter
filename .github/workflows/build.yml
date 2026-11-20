@@ -1,0 +1,61 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, main ]
+
+env:
+  PROJ: src/J2ME-Loader-1.8.2-auto-resize
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip source
+        run: |
+          mkdir -p src
+          unzip -q ./*.zip -d src
+          ls "$PROJ"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install NDK 22.1.7171670
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;22.1.7171670"
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cd "$PROJ"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$PWD/release.keystore"
+            SP="$KEYSTORE_PASSWORD"; KA="$KEY_ALIAS"; KP="$KEY_PASSWORD"
+          else
+            SP="android123"; KA="j2me"; KP="android123"
+            keytool -genkeypair -keystore "$PWD/release.keystore" \
+              -alias "$KA" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$SP" -keypass "$KP" -dname "CN=J2ME Loader Auto Resize"
+          fi
+          printf 'keyAlias=%s\nkeyPassword=%s\nstoreFile=%s\nstorePassword=%s\n' \
+            "$KA" "$KP" "$PWD/release.keystore" "$SP" > keystore.properties
+
+      - name: Build (open flavor, debug + release)
+        working-directory: ${{ env.PROJ }}
+        run: chmod +x gradlew && ./gradlew -Dorg.gradle.jvmargs="-Xmx4g" assembleOpenDebug assembleOpenRelease --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: J2ME-Loader-auto-resize-apk
+          path: ${{ env.PROJ }}/app/build/outputs/apk/open/**/*.apk
